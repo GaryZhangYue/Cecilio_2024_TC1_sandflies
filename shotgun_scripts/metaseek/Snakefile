@@ -1,0 +1,173 @@
+###########################################################################
+# Metagenomic/metatranscriptomic Analysis
+# Yue (Gary) Zhang, Ph.D
+# 2023/07/01
+# Snakemake/7.19.1
+
+###########################################################################
+
+from snakemake.utils import R
+import glob
+import os
+from os import listdir
+from os.path import isfile, isdir, join
+import os.path as path
+import sys
+
+######################### paths #################################
+# set the paths
+path_root = config['path_root']
+path_raw_reads = config['path_raw_reads']
+path_analysis = config['path_analysis']
+
+
+################### generate sample lists ###############################
+# create a list of raw fastq files 
+# DNA
+sample_list = [os.path.basename(file).split('_R1')[0] for file in glob.glob(path_raw_reads+'/*R1_001.fastq.gz')]                  # Basenames of the input samples
+print(sample_list)
+print(path_raw_reads)
+print(os.listdir(path_raw_reads))
+path_raw_dna_reads_dc = path.join(path_analysis,"decompressed_reads")
+path_trimmed_dna_reads = path.join(path_analysis,"trimmed_reads")
+########################### rules #################################
+rule target:
+    input:
+        # run step 1 decompress DNA data
+        expand("{path}/{sample}_1.fastq", path=path_raw_dna_reads_dc, sample=sample_list),
+        expand("{path}/{sample}_2.fastq", path=path_raw_dna_reads_dc, sample=sample_list),
+        # run step 2 read QC DNA data
+        expand("{path}/{sample}_1.fastq", path=path_trimmed_dna_reads, sample=sample_list),
+        expand("{path}/{sample}_2.fastq", path=path_trimmed_dna_reads, sample=sample_list),
+        # run step 3 co-assembly
+        #path.join(path_analysis,"CO-ASSEMBLY"),
+        # run step 4 fastQC DNA
+        #expand("{path}/FASTQC/TRIMMED/{sample}",path=path_analysis,sample=sample_list),
+        #expand("{path}/FASTQC/UNTRIMMED/{sample}",path=path_analysis,sample=sample_list),
+        # run step 5 humann3 on DNA reads
+        #expand("{path}/{sample}_CONCAT.fastq",path=path_trimmed_dna_reads,sample=sample_list),
+        #expand("{path}/HUMANN3/{sample}", path=path_analysis,sample=sample_list)
+########################## steps #######################################
+# 1. decompress DNA data
+rule decompress:
+    input:
+        #"/data/NIDDK_IDSS/projects/NIDDK-13/CFDNA/mtdna/rawdata/{sample}.fastq.gz"
+        R1 = path.join(path_raw_reads,"{sample}_R1_001.fastq.gz"),
+        R2 = path.join(path_raw_reads,"{sample}_R2_001.fastq.gz")
+    output:
+        #"/data/NIDDK_IDSS/projects/NIDDK-13_YZ/CFDNA/RAW_READS_DC/{sample}.fastq"
+        R1 = path.join(path_raw_dna_reads_dc,"{sample}_1.fastq"),
+        R2 = path.join(path_raw_dna_reads_dc,"{sample}_2.fastq")
+    params:
+      rname = "decompress",
+      tag = "{sample}"
+    shell: """
+        gunzip -c {input.R1} > {output.R1};
+        gunzip -c {input.R2} > {output.R2}
+    """
+# 2. readQC_DNA
+rule read_QC_DNA:
+    input:
+        R1 = path.join(path_raw_dna_reads_dc,"{sample}_1.fastq"),
+        R2 = path.join(path_raw_dna_reads_dc,"{sample}_2.fastq")
+    output:
+        R1 = path.join(path_trimmed_dna_reads,"{sample}_1.fastq"),
+        R2 = path.join(path_trimmed_dna_reads,"{sample}_2.fastq"),	
+    params:
+        rname = "read_QC_DNA",
+        tag = "{sample}",
+        threads = "4",
+        reference = "hg38",
+        tmp_out = path.join(path_analysis,"metawrap_readQC","{sample}")
+    conda:
+        "metawrap-env"
+    log:
+        logname = "logs/{sample}_readQC_DNA.log"
+    shell: """
+        mkdir -p {params.tmp_out}
+        metawrap read_qc -1 {input.R1} -2 {input.R2} \
+        -x {params.reference} -t {params.threads} \
+        -o {params.tmp_out} > {log} 2>&1;
+        cp {params.tmp_out}/final_pure_reads_1.fastq {output.R1};
+        cp {params.tmp_out}/final_pure_reads_2.fastq {output.R2}
+    """
+# 3. MAGs co-assembly
+rule co_assembly:
+    input:
+        R1 = expand("{path}/{sample}_1.fastq", path=path_trimmed_dna_reads, sample=sample_list),
+        R2 = expand("{path}/{sample}_2.fastq", path=path_trimmed_dna_reads, sample=sample_list)
+    output:
+        R1 = path.join(path_trimmed_dna_reads,"ALL_READS_1.fastq"),
+        R2 = path.join(path_trimmed_dna_reads,"ALL_READS_2.fastq"),
+        MAGS = directory(path.join(path_analysis,"CO-ASSEMBLY"))
+    params:
+        mem = "300",
+        threads = "16",
+        rname = "co_assembly",
+    log:
+        logname = "logs/co-assembly.log"
+    shell: """        
+        cat {input.R1} > {output.R1};
+        cat {input.R2} > {output.R2};
+        metawrap assembly \
+        -1 {output.R1} -2 {output.R2} \
+        -m {params.mem} -t {params.threads} \
+        --metaspades --megahit -o {output.MAGS} > {log} 2>&1;
+    """
+
+# 4. fastQC DNA
+rule fastQC_DNA:
+    input:
+        R1_TRIMMED = path.join(path_trimmed_dna_reads,"{sample}_1.fastq"),
+        R2_TRIMMED = path.join(path_trimmed_dna_reads,"{sample}_2.fastq"),
+        R1_UNTRIMMED = path.join(path_raw_dna_reads_dc,"{sample}_1.fastq"),
+        R2_UNTRIMMED = path.join(path_raw_dna_reads_dc,"{sample}_2.fastq")
+    output:
+        TRIMMED = directory(path.join(path_analysis,"FASTQC","TRIMMED","{sample}")),
+        UNTRIMMED = directory(path.join(path_analysis,"FASTQC","UNTRIMMED","{sample}"))
+    envmodules:
+        "fastqc/0.11.9"
+    params:
+        threads = "4",
+        rname = "fastQC_DNA",
+        tag = "{sample}"
+    log:
+        logname = "logs/{sample}_fastQC_DNA.log"
+    shell: """
+        mkdir -p {output.TRIMMED}; mkdir -p {output.UNTRIMMED}
+        fastqc -o {output.TRIMMED} -t {params.threads} -f fastq {input.R1_TRIMMED} {input.R2_TRIMMED} > {log} 2>&1;
+        fastqc -o {output.UNTRIMMED} -t {params.threads} -f fastq {input.R1_UNTRIMMED} {input.R2_UNTRIMMED} >> {log} 2>&1;
+        """
+# 5. taxonomy and function classification using humann3
+rule humann3:
+    input:
+        R1 = path.join(path_trimmed_dna_reads,"{sample}_1.fastq"),
+        R2 = path.join(path_trimmed_dna_reads,"{sample}_2.fastq"),
+    output:
+        CONCAT = path.join(path_trimmed_dna_reads,"{sample}_CONCAT.fastq"),
+        HUMANN = directory(path.join(path_analysis,"HUMANN3","{sample}"))
+    envmodules:
+        "humann/3.6.0"
+    params:
+        threads = "16",
+        rname = "humann",
+        tag = "{sample}"
+    log:
+        "logs/{sample}_humann3_DNA.log"
+    params:
+
+    shell: """
+        cat {input.R1} {input.R2} > {output.CONCAT};
+        humann \
+        --threads {params.threads} \
+        --input {output.CONCAT} \
+        --input-format fastq \
+        --output-basename {wildcards.sample} \
+        --output {output.HUMANN} \
+        --metaphlan-options "--read_min_len 70" \
+        --o-log {log}
+    """
+
+
+
+
