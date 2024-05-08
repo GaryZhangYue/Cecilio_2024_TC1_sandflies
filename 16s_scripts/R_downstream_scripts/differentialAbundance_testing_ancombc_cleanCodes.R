@@ -64,7 +64,7 @@ metadata.o = data.frame(sample_data(pu),check.names = F)
 pu.tre = phy_tree(pu)
 
 #remove the ghost ASVs
-dim(subset(pu.asv, rowSums(pu.asv)<0)) # no ghost ASVs
+dim(subset(pu.asv, rowSums(pu.asv)==0)) # no ghost ASVs
 
 # sanity check using the a function from iCAMP
 #check if sample id matches between metadata and the ASV table
