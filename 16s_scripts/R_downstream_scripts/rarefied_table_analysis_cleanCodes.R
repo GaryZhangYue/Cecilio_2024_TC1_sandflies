@@ -169,6 +169,70 @@ ggplot(data = asv.taxa.genus[[3]], mapping = aes(x = `Replicate_index`, y = `fre
   guides(fill=guide_legend(nrow=2))
 ggsave(paste(PFIG,"/",'Taxonomy_top_9_genera_barplot.png',sep = ""),width = 10, height = 5, device = 'png')
 
+# Relative abundance of Serratia and Delftia comparing TC1 with CTRL for each day
+## Bar plot
+g.ds = asv.taxa.genus[[1]]
+# write.csv(g.ds,paste0(PFIG,'/','rarefied_table_genus_table.csv'))
+
+g.ds %>% subset(rownames(g.ds) %in% c('Serratia','Delftia')) %>%
+  t() %>% merge(x = ., y = select(metadata.o,c(Condition,'Day.categorical')), by = 0) -> g.ds
+
+g.ds.long <- g.ds %>%
+  pivot_longer(cols = c(Serratia, Delftia),  # Columns to stack
+               names_to = "Genus",           # New column for genus names
+               values_to = "RelativeAbundance") %>%  # New column for values
+  arrange(Day.categorical)  # Sort by day if needed
+
+g.ds.long$Genus[g.ds.long$Genus == 'Serratia'] <- 'Serratia sp'
+g.ds.long$Genus[g.ds.long$Genus == 'Delftia'] <- 'Delftia. spp'
+g.ds.long$Condition = as.character(g.ds.long$Condition)
+g.ds.long$Condition[g.ds.long$Condition == 'TC1'] <- 'D. tsuruhatensis'
+g.ds.long$Condition[g.ds.long$Condition == 'CTRL'] <- 'Control'
+
+# Compute mean and standard deviation
+summary_stats <- g.ds.long %>%
+  group_by(Day.categorical, Condition, Genus) %>%
+  summarise(
+    mean_abundance = mean(RelativeAbundance, na.rm = TRUE),
+    sd_abundance = sd(RelativeAbundance, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Create the plot
+ggplot(summary_stats, aes(x = Day.categorical, y = mean_abundance, fill = Condition)) + 
+  geom_col(position = position_dodge(width = 0.8), alpha = 0.6) +  # Bar plot with dodge
+  geom_errorbar(aes(ymin = mean_abundance - sd_abundance, ymax = mean_abundance + sd_abundance), 
+                position = position_dodge(width = 0.8), width = 0.3) +  # Add standard deviation error bars
+  geom_jitter(data = g.ds.long, aes(x = Day.categorical, y = RelativeAbundance, color = Condition), 
+              position = position_jitterdodge(dodge.width = 0.8, jitter.width = 0.2), 
+              size = 1.2, alpha = 0.7) +  # Jitter points
+  facet_wrap(~Genus, scales = "free_y") +  # Facet by Genus
+  scale_fill_uchicago() +  # Use "uchicago" palette for fill
+  scale_color_manual(values = c("black", "darkgray")) +  # Set jitter color
+  theme_pubr() +
+  labs(x = "Day",  
+       y = "Relative Abundance")
+ggsave(paste0(PFIG,'/','rarefied_table_serratia_delftia_relAbun_meanstd.barplot.pdf'),width = 8,height = 6, device = 'pdf')
+
+
+## Box plot
+ggboxplot(g.ds.long, 
+          x = "Day.categorical", 
+          y = "RelativeAbundance", 
+          color = "Condition",  # Color by Condition
+          facet.by = "Genus",  # Facet by Genus
+          palette = "uchicago",
+          add = 'jitter',
+          scales = "free_y") +  # Use Uchicago color scheme
+  labs(x = "Day",  
+       y = "Relative Abundance") +
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        text = element_text(size = 14, colour = "black"),
+        strip.text = element_text(size = 15, face = "bold"))
+ggsave(paste0(PFIG,'/','rarefied_table_serratia_delftia_relAbun_meanstd.boxplot.pdf'),width = 8,height = 6, device = 'pdf')
+
 #######################Alpha diversity analysis############################
 # function to read in the diversity metrix
 read_alpha_diversity = function(path_to_qza) {
